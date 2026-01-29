@@ -1,0 +1,235 @@
+"""
+CSV handler module for saving metadata to GCS
+"""
+import pandas as pd
+from typing import List, Dict
+import logging
+from io import StringIO
+from utils.gcs_utils import GCSHelper
+
+
+class CSVHandler:
+    """Handle CSV creation and upload to GCS"""
+    
+    def __init__(self, gcs_helper: GCSHelper):
+        """Initialize CSV handler
+        
+        Args:
+            gcs_helper: GCSHelper instance for GCS operations
+        """
+        self.gcs_helper = gcs_helper
+        self.logger = logging.getLogger('kia_metadata.csv')
+    
+    def create_dataframe(self, metadata_list: List[Dict]) -> pd.DataFrame:
+        """Create pandas DataFrame from metadata list
+        
+        Args:
+            metadata_list: List of metadata dictionaries
+            
+        Returns:
+            pandas DataFrame
+        """
+        try:
+            if not metadata_list:
+                self.logger.warning("Empty metadata list provided")
+                return pd.DataFrame()
+            
+            df = pd.DataFrame(metadata_list)
+            
+            # Define column order
+            column_order = [
+                'document_id',
+                'source_type',
+                'file_name',
+                'upload_date',
+                'car_model',
+                'car_type',
+                'engine_type',
+                'price',
+                'page_count',
+                'text_length',
+                'features',
+                'keywords',
+                'summary',
+                'specifications',
+                'gcs_uri',
+            ]
+            
+            # Reorder columns (only include existing columns)
+            existing_columns = [col for col in column_order if col in df.columns]
+            df = df[existing_columns]
+            
+            self.logger.info(f"Created DataFrame with {len(df)} rows and {len(df.columns)} columns")
+            return df
+        
+        except Exception as e:
+            self.logger.error(f"Error creating DataFrame: {str(e)}")
+            raise
+    
+    def save_to_gcs(self, df: pd.DataFrame, bucket_name: str, 
+                    blob_path: str, file_name: str = None) -> str:
+        """Save DataFrame as CSV to GCS
+        
+        Args:
+            df: pandas DataFrame to save
+            bucket_name: GCS bucket name
+            blob_path: Path in GCS bucket (e.g., 'output/metadata/')
+            file_name: Optional custom file name
+            
+        Returns:
+            GCS URI of the saved file
+        """
+        try:
+            if df.empty:
+                self.logger.warning("Empty DataFrame, skipping save")
+                return ""
+            
+            # Generate file name if not provided
+            if not file_name:
+                from datetime import datetime
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                file_name = f"kia_metadata_{timestamp}.csv"
+            
+            # Ensure file_name ends with .csv
+            if not file_name.endswith('.csv'):
+                file_name += '.csv'
+            
+            # Construct full blob path
+            full_blob_path = f"{blob_path.rstrip('/')}/{file_name}"
+            
+            # Convert DataFrame to CSV string
+            csv_buffer = StringIO()
+            df.to_csv(csv_buffer, index=False, encoding='utf-8-sig')
+            csv_content = csv_buffer.getvalue()
+            
+            # Upload to GCS
+            gcs_uri = self.gcs_helper.upload_from_string(
+                bucket_name=bucket_name,
+                blob_name=full_blob_path,
+                content=csv_content,
+                content_type='text/csv'
+            )
+            
+            self.logger.info(f"Successfully saved CSV to {gcs_uri}")
+            return gcs_uri
+        
+        except Exception as e:
+            self.logger.error(f"Error saving CSV to GCS: {str(e)}")
+            raise
+    
+    def save_locally(self, df: pd.DataFrame, file_path: str) -> str:
+        """Save DataFrame as CSV locally (for testing/backup)
+        
+        Args:
+            df: pandas DataFrame to save
+            file_path: Local file path
+            
+        Returns:
+            Path to saved file
+        """
+        try:
+            if df.empty:
+                self.logger.warning("Empty DataFrame, skipping save")
+                return ""
+            
+            df.to_csv(file_path, index=False, encoding='utf-8-sig')
+            self.logger.info(f"Successfully saved CSV locally to {file_path}")
+            return file_path
+        
+        except Exception as e:
+            self.logger.error(f"Error saving CSV locally: {str(e)}")
+            raise
+    
+    def append_to_existing(self, new_df: pd.DataFrame, bucket_name: str, 
+                          existing_blob_path: str) -> str:
+        """Append new data to existing CSV in GCS
+        
+        Args:
+            new_df: New DataFrame to append
+            bucket_name: GCS bucket name
+            existing_blob_path: Path to existing CSV in GCS
+            
+        Returns:
+            GCS URI of the updated file
+        """
+        try:
+            # Check if file exists
+            blob_name = existing_blob_path.replace(f"gs://{bucket_name}/", "")
+            
+            if self.gcs_helper.blob_exists(bucket_name, blob_name):
+                # Download existing CSV
+                from google.cloud import storage
+                client = storage.Client()
+                bucket = client.bucket(bucket_name)
+                blob = bucket.blob(blob_name)
+                
+                csv_content = blob.download_as_string().decode('utf-8-sig')
+                existing_df = pd.read_csv(StringIO(csv_content))
+                
+                # Append new data
+                combined_df = pd.concat([existing_df, new_df], ignore_index=True)
+                self.logger.info(f"Appending {len(new_df)} rows to existing {len(existing_df)} rows")
+            else:
+                combined_df = new_df
+                self.logger.info(f"File doesn't exist, creating new with {len(new_df)} rows")
+            
+            # Save combined DataFrame
+            csv_buffer = StringIO()
+            combined_df.to_csv(csv_buffer, index=False, encoding='utf-8-sig')
+            csv_content = csv_buffer.getvalue()
+            
+            gcs_uri = self.gcs_helper.upload_from_string(
+                bucket_name=bucket_name,
+                blob_name=blob_name,
+                content=csv_content,
+                content_type='text/csv'
+            )
+            
+            self.logger.info(f"Successfully updated CSV at {gcs_uri}")
+            return gcs_uri
+        
+        except Exception as e:
+            self.logger.error(f"Error appending to CSV: {str(e)}")
+            raise
+    
+    def generate_report(self, df: pd.DataFrame) -> str:
+        """Generate a simple text report from DataFrame
+        
+        Args:
+            df: pandas DataFrame
+            
+        Returns:
+            Report text
+        """
+        if df.empty:
+            return "No data available for report"
+        
+        report = []
+        report.append("=" * 60)
+        report.append("KIA METADATA GENERATION REPORT")
+        report.append("=" * 60)
+        report.append(f"\nTotal Documents Processed: {len(df)}")
+        report.append(f"Generation Date: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        
+        # Car model distribution
+        if 'car_model' in df.columns:
+            report.append("\n\nCar Model Distribution:")
+            model_counts = df['car_model'].value_counts()
+            for model, count in model_counts.items():
+                report.append(f"  - {model}: {count}")
+        
+        # Source type distribution
+        if 'source_type' in df.columns:
+            report.append("\n\nSource Type Distribution:")
+            source_counts = df['source_type'].value_counts()
+            for source, count in source_counts.items():
+                report.append(f"  - {source}: {count}")
+        
+        # Average page count
+        if 'page_count' in df.columns:
+            avg_pages = df['page_count'].mean()
+            report.append(f"\n\nAverage Page Count: {avg_pages:.2f}")
+        
+        report.append("\n" + "=" * 60)
+        
+        return "\n".join(report)
