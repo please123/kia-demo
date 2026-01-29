@@ -13,6 +13,39 @@ from config import Settings
 from utils import setup_logger, GCSHelper
 from modules import TextExtractor, MetadataGenerator, CSVHandler
 from tqdm import tqdm
+from datetime import datetime
+
+
+def _list_input_files(settings: Settings, gcs_helper: GCSHelper, logger) -> list[str]:
+    """
+    Resolve input sources into a list of GCS URIs.
+
+    Supported:
+    - GCS_INPUT_BUCKET (+ optional GCS_INPUT_PREFIX): bucket-wide batch
+    - legacy GCS_INPUT_FOLDER (gs://bucket/prefix): prefix batch
+    - GCS_INPUT_PATH with wildcard like gs://bucket/prefix/* : treated as prefix batch
+    """
+    # 1) Preferred: bucket + prefix
+    if getattr(settings, "gcs_input_bucket", ""):
+        bucket_name = settings.gcs_input_bucket
+        prefix = getattr(settings, "gcs_input_prefix", "") or ""
+        logger.info(f"\n📁 Listing files in gs://{bucket_name}/{prefix}")
+        return gcs_helper.list_blobs(bucket_name=bucket_name, prefix=prefix, suffix="")
+
+    # 2) Legacy folder URI: gs://bucket/prefix
+    if settings.gcs_input_folder:
+        bucket_name, prefix = settings.parse_gcs_uri(settings.gcs_input_folder)
+        logger.info(f"\n📁 Listing files in gs://{bucket_name}/{prefix}")
+        return gcs_helper.list_blobs(bucket_name=bucket_name, prefix=prefix, suffix="")
+
+    # 3) Wildcard path: gs://bucket/prefix/*
+    if settings.gcs_input_path and "*" in settings.gcs_input_path:
+        base = settings.gcs_input_path.split("*", 1)[0]
+        bucket_name, prefix = settings.parse_gcs_uri(base)
+        logger.info(f"\n📁 Listing files in gs://{bucket_name}/{prefix}")
+        return gcs_helper.list_blobs(bucket_name=bucket_name, prefix=prefix, suffix="")
+
+    return []
 
 
 def process_single_file(settings: Settings, logger) -> bool:
@@ -43,11 +76,25 @@ def process_single_file(settings: Settings, logger) -> bool:
         gcs_helper = GCSHelper(project_id=settings.gcp_project_id)
         csv_handler = CSVHandler(gcs_helper=gcs_helper)
         
-        # Extract text from document
-        logger.info(f"\n📄 Processing: {settings.gcs_input_path}")
-        extracted_data = text_extractor.extract_text_from_gcs(
-            gcs_uri=settings.gcs_input_path
-        )
+        # Check file size
+        size_bytes = gcs_helper.get_blob_size(settings.gcs_input_path)
+        
+        if size_bytes > settings.documentai_max_sync_bytes:
+            logger.info(f"⚠️ File size ({size_bytes} bytes) exceeds sync limit. Switching to async batch processing.")
+            
+            # Generate temporary output prefix
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            temp_output_prefix = f"gs://{settings.gcs_output_bucket}/temp_async_output/{timestamp}/"
+            
+            extracted_data = text_extractor.batch_process_document(
+                gcs_uri=settings.gcs_input_path,
+                gcs_output_uri_prefix=temp_output_prefix,
+                gcs_helper=gcs_helper
+            )
+        else:
+            extracted_data = text_extractor.extract_text_from_gcs(
+                gcs_uri=settings.gcs_input_path
+            )
         
         # Generate metadata
         logger.info("\n🔍 Generating metadata...")
@@ -69,8 +116,8 @@ def process_single_file(settings: Settings, logger) -> bool:
         )
         
         # Optional: Save locally as backup
-        local_output_path = project_root / 'data' / 'local_output' / output_file_name
-        csv_handler.save_locally(df, str(local_output_path))
+        # local_output_path = project_root / 'data' / 'local_output' / output_file_name
+        # csv_handler.save_locally(df, str(local_output_path))
         
         # Generate and display report
         logger.info("\n" + "=" * 60)
@@ -80,7 +127,7 @@ def process_single_file(settings: Settings, logger) -> bool:
         print(report)
         
         logger.info(f"\n✅ CSV saved to GCS: {gcs_uri}")
-        logger.info(f"✅ CSV saved locally: {local_output_path}")
+        # logger.info(f"✅ CSV saved locally: {local_output_path}")
         
         return True
     
@@ -120,14 +167,9 @@ def process_batch_files(settings: Settings, logger) -> bool:
         csv_handler = CSVHandler(gcs_helper=gcs_helper)
         
         # Get list of files from GCS
-        bucket_name, prefix = settings.parse_gcs_uri(settings.gcs_input_folder)
-        logger.info(f"\n📁 Listing files in gs://{bucket_name}/{prefix}")
-        
-        file_uris = gcs_helper.list_blobs(
-            bucket_name=bucket_name,
-            prefix=prefix,
-            suffix='.pptx'  # Can be modified to support multiple formats
-        )
+        all_uris = _list_input_files(settings, gcs_helper, logger)
+        supported_exts = (".pptx", ".pdf", ".docx")
+        file_uris = [u for u in all_uris if u.lower().endswith(supported_exts)]
         
         if not file_uris:
             logger.warning("No files found to process")
@@ -141,9 +183,31 @@ def process_batch_files(settings: Settings, logger) -> bool:
         for file_uri in tqdm(file_uris, desc="Processing files"):
             try:
                 logger.info(f"\n📄 Processing: {file_uri}")
-                
-                # Extract text
-                extracted_data = text_extractor.extract_text_from_gcs(gcs_uri=file_uri)
+
+                # Guard: Document AI sync API has a size limit; skip oversized files to keep batch running
+                try:
+                    size_bytes = gcs_helper.get_blob_size(file_uri)
+                except Exception as e:
+                    logger.warning(f"⚠️  Could not get size for {file_uri}: {e}. Will try processing anyway.")
+                    size_bytes = 0
+
+                if size_bytes and size_bytes > settings.documentai_max_sync_bytes:
+                    logger.info(
+                        f"⚠️ File size ({size_bytes} bytes) exceeds sync limit. Switching to async batch processing."
+                    )
+                    # Generate temporary output prefix
+                    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                    file_name = file_uri.split('/')[-1]
+                    temp_output_prefix = f"gs://{settings.gcs_output_bucket}/temp_async_output/{timestamp}/{file_name}/"
+                    
+                    extracted_data = text_extractor.batch_process_document(
+                        gcs_uri=file_uri,
+                        gcs_output_uri_prefix=temp_output_prefix,
+                        gcs_helper=gcs_helper
+                    )
+                else:
+                    # Extract text (Sync)
+                    extracted_data = text_extractor.extract_text_from_gcs(gcs_uri=file_uri)
                 
                 # Generate metadata
                 metadata = metadata_generator.generate_metadata(extracted_data)
@@ -163,7 +227,6 @@ def process_batch_files(settings: Settings, logger) -> bool:
         logger.info(f"\n💾 Saving metadata for {len(all_metadata)} files to GCS...")
         df = csv_handler.create_dataframe(all_metadata)
         
-        from datetime import datetime
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         output_file_name = f"kia_batch_metadata_{timestamp}.csv"
         
@@ -175,8 +238,8 @@ def process_batch_files(settings: Settings, logger) -> bool:
         )
         
         # Optional: Save locally as backup
-        local_output_path = project_root / 'data' / 'local_output' / output_file_name
-        csv_handler.save_locally(df, str(local_output_path))
+        # local_output_path = project_root / 'data' / 'local_output' / output_file_name
+        # csv_handler.save_locally(df, str(local_output_path))
         
         # Generate and display report
         logger.info("\n" + "=" * 60)
@@ -186,7 +249,7 @@ def process_batch_files(settings: Settings, logger) -> bool:
         print(report)
         
         logger.info(f"\n✅ CSV saved to GCS: {gcs_uri}")
-        logger.info(f"✅ CSV saved locally: {local_output_path}")
+        # logger.info(f"✅ CSV saved locally: {local_output_path}")
         
         return True
     
@@ -205,7 +268,7 @@ def main():
     parser.add_argument(
         '--batch',
         action='store_true',
-        help='Process all files in GCS_INPUT_FOLDER (batch mode)'
+        help='Process all files in input bucket (batch mode)'
     )
     parser.add_argument(
         '--verbose',
@@ -231,15 +294,17 @@ def main():
     
     # Process files
     if args.batch:
-        if not settings.gcs_input_folder:
-            logger.error("GCS_INPUT_FOLDER must be set in .env for batch mode")
-            sys.exit(1)
         success = process_batch_files(settings, logger)
     else:
-        if not settings.gcs_input_path:
-            logger.error("GCS_INPUT_PATH must be set in .env for single file mode")
-            sys.exit(1)
-        success = process_single_file(settings, logger)
+        # If user provided wildcard like gs://bucket/prefix/*, treat it as batch automatically
+        if settings.gcs_input_path and "*" in settings.gcs_input_path:
+            logger.info("Detected wildcard in GCS_INPUT_PATH; switching to batch processing.")
+            success = process_batch_files(settings, logger)
+        else:
+            if not settings.gcs_input_path:
+                logger.error("GCS_INPUT_PATH must be set in .env for single file mode")
+                sys.exit(1)
+            success = process_single_file(settings, logger)
     
     # Exit with appropriate code
     sys.exit(0 if success else 1)

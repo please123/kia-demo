@@ -12,7 +12,8 @@ class Settings:
     
     def __init__(self):
         # Load .env file
-        env_path = Path(__file__).parent.parent / '.env'
+        # NOTE: .env는 프로젝트 루트(= settings.py가 있는 폴더)에 두는 것을 전제로 함
+        env_path = Path(__file__).resolve().parent / '.env'
         load_dotenv(env_path)
         
         # GCP Settings
@@ -22,10 +23,19 @@ class Settings:
         # Document AI Settings
         self.documentai_processor_id: str = os.getenv('DOCUMENTAI_PROCESSOR_ID', '')
         self.documentai_location: str = os.getenv('DOCUMENTAI_LOCATION', 'us')
+        # Document AI sync process_document limit (bytes). Default 20MB.
+        # Large files should be handled via Document AI Batch API or pre-processing (compress/split).
+        self.documentai_max_sync_bytes: int = int(os.getenv('DOCUMENTAI_MAX_SYNC_BYTES', str(20 * 1024 * 1024)))
         
         # GCS Input Settings
         self.gcs_input_path: Optional[str] = os.getenv('GCS_INPUT_PATH')
         self.gcs_input_folder: Optional[str] = os.getenv('GCS_INPUT_FOLDER')
+        # Batch mode (bucket-wide) input settings
+        # 기본값은 비워두고(안전), env.template에서 명시적으로 설정하도록 유도
+        # 예: 버킷 전체 처리 -> GCS_INPUT_BUCKET=input-data
+        # 예: 버킷 kia-demo의 input-data/ prefix만 -> GCS_INPUT_BUCKET=kia-demo, GCS_INPUT_PREFIX=input-data/
+        self.gcs_input_bucket: str = os.getenv('GCS_INPUT_BUCKET', '')
+        self.gcs_input_prefix: str = os.getenv('GCS_INPUT_PREFIX', '')
         
         # GCS Output Settings
         self.gcs_output_bucket: str = os.getenv('GCS_OUTPUT_BUCKET', '')
@@ -51,8 +61,11 @@ class Settings:
             return False
         
         # Check if at least one input method is specified
-        if not self.gcs_input_path and not self.gcs_input_folder:
-            print("❌ Either GCS_INPUT_PATH or GCS_INPUT_FOLDER must be specified")
+        # - single: GCS_INPUT_PATH
+        # - legacy batch: GCS_INPUT_FOLDER
+        # - bucket-wide batch: GCS_INPUT_BUCKET (default: input-data)
+        if not self.gcs_input_path and not self.gcs_input_folder and not self.gcs_input_bucket:
+            print("❌ Either GCS_INPUT_PATH, GCS_INPUT_FOLDER, or GCS_INPUT_BUCKET must be specified")
             return False
         
         # Check if credentials file exists

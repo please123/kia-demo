@@ -5,6 +5,9 @@ from google.cloud import documentai_v1 as documentai
 from typing import Dict, Optional
 import logging
 import re
+import time
+import json
+from google.api_core.client_options import ClientOptions
 
 
 class TextExtractor:
@@ -150,3 +153,124 @@ class TextExtractor:
         # Remove special characters that might cause issues
         text = text.strip()
         return text
+
+    def batch_process_document(self, gcs_uri: str, gcs_output_uri_prefix: str, gcs_helper) -> Dict:
+        """Process a large document using Document AI Batch API (Async)
+        
+        Args:
+            gcs_uri: Input GCS URI
+            gcs_output_uri_prefix: Output GCS URI prefix (must end with /)
+            gcs_helper: GCSHelper instance for reading results
+            
+        Returns:
+            Dictionary containing extracted text and metadata
+        """
+        try:
+            self.logger.info(f"Starting async batch processing for: {gcs_uri}")
+            
+            # Determine MIME type
+            mime_type = 'application/pdf'  # default
+            if gcs_uri.endswith('.pptx'):
+                mime_type = 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+            elif gcs_uri.endswith('.pdf'):
+                mime_type = 'application/pdf'
+            elif gcs_uri.endswith('.docx'):
+                mime_type = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+
+            # Configure input
+            gcs_documents = documentai.GcsDocuments(
+                documents=[
+                    documentai.GcsDocument(
+                        gcs_uri=gcs_uri,
+                        mime_type=mime_type
+                    )
+                ]
+            )
+            input_config = documentai.BatchDocumentsInputConfig(gcs_documents=gcs_documents)
+
+            # Configure output
+            output_config = documentai.DocumentOutputConfig(
+                gcs_output_config=documentai.DocumentOutputConfig.GcsOutputConfig(
+                    gcs_uri=gcs_output_uri_prefix
+                )
+            )
+
+            # Create request
+            request = documentai.BatchProcessRequest(
+                name=self.processor_name,
+                input_documents=input_config,
+                document_output_config=output_config
+            )
+
+            # Start operation
+            operation = self.client.batch_process_documents(request=request)
+            
+            self.logger.info(f"Waiting for operation to complete... (Operation: {operation.operation.name})")
+            operation.result(timeout=600)  # Wait up to 10 minutes
+            self.logger.info("Operation completed successfully.")
+
+            # List output files
+            # Output format: [gcs_output_uri_prefix]/[operation_id]/[input_file_index]/[input_file_name]/[output_file_index].json
+            # We just list everything under the prefix and look for JSONs
+            
+            # Parse prefix to bucket and path
+            if not gcs_output_uri_prefix.startswith('gs://'):
+                raise ValueError(f"Invalid output prefix: {gcs_output_uri_prefix}")
+            
+            parts = gcs_output_uri_prefix[5:].split('/', 1)
+            bucket_name = parts[0]
+            prefix = parts[1] if len(parts) > 1 else ''
+            
+            output_files = gcs_helper.list_blobs(bucket_name=bucket_name, prefix=prefix, suffix=".json")
+            
+            if not output_files:
+                raise RuntimeError("No output JSON files found after batch processing")
+
+            # Combine results (Document AI might split large files into multiple JSONs)
+            combined_text = ""
+            combined_pages = []
+            combined_entities = []
+            
+            # Sort to ensure order
+            output_files.sort()
+            
+            for output_file in output_files:
+                json_content = gcs_helper.read_file(output_file)
+                document = documentai.Document.from_json(json_content)
+                
+                # Append text
+                combined_text += document.text
+                
+                # Append pages (adjust page numbers if necessary, but usually they are absolute)
+                for page in document.pages:
+                    page_data = {
+                        'page_number': page.page_number,
+                        'text': self._extract_page_text(document.text, page),
+                    }
+                    combined_pages.append(page_data)
+                
+                # Append entities
+                for entity in document.entities:
+                    entity_data = {
+                        'type': entity.type_,
+                        'mention_text': entity.mention_text,
+                        'confidence': entity.confidence
+                    }
+                    combined_entities.append(entity_data)
+
+            extracted_data = {
+                'full_text': combined_text,
+                'pages': combined_pages,
+                'entities': combined_entities,
+                'gcs_uri': gcs_uri,
+                'mime_type': mime_type
+            }
+            
+            self.logger.info(f"Successfully processed large file: {gcs_uri}")
+            self.logger.info(f"Total pages: {len(combined_pages)}")
+            
+            return extracted_data
+
+        except Exception as e:
+            self.logger.error(f"Error in batch processing for {gcs_uri}: {str(e)}")
+            raise
