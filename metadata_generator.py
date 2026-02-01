@@ -27,7 +27,7 @@ class MetadataGenerator:
             raise ValueError("Google API key must be provided or set in GOOGLE_API_KEY environment variable")
 
         genai.configure(api_key=api_key)
-        self.model = genai.GenerativeModel('gemini-2.0-flash-exp')
+        self.model = genai.GenerativeModel('gemini-2.5-flash')
 
         # System prompt for Gemini
         self.system_prompt = """## Gemini 데이터 라벨링 시스템 프롬프트 ##
@@ -110,12 +110,12 @@ JSON 출력: 모든 결과는 반드시 아래 구조의 JSON 형식으로만 �
 
             # Combine with basic document information
             metadata = {
-                'document_id': self._generate_document_id(file_name),
-                'file_name': file_name,
-                'upload_date': datetime.now().strftime('%Y-%m-%d'),
-                'gcs_uri': gcs_uri,
-                'page_count': len(extracted_data.get('pages', [])),
-                'text_length': len(full_text),
+                # 'document_id': self._generate_document_id(file_name),
+                # 'file_name': file_name,
+                # 'upload_date': datetime.now().strftime('%Y-%m-%d'),
+                # 'gcs_uri': gcs_uri,
+                # 'page_count': len(extracted_data.get('pages', [])),
+                # 'text_length': len(full_text),
 
                 # Gemini-extracted metadata
                 'type': gemini_metadata.get('type', 'UNKNOWN'),

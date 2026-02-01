@@ -5,7 +5,14 @@ from google.cloud import storage
 from typing import List, Optional
 import logging
 from google.api_core import exceptions as gcp_exceptions
+import os
+import urllib3
 
+# SSL 검증 비활성화 시작 (개발 환경용)
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+os.environ['REQUESTS_CA_BUNDLE'] = ''
+os.environ['CURL_CA_BUNDLE'] = ''
+# SSL 검증 비활성화 끝 (개발 환경용)
 
 class GCSHelper:
     """Helper class for GCS operations"""

@@ -6,7 +6,7 @@ from pathlib import Path
 
 # Set SSL certificate environment variables BEFORE loading dotenv and other imports
 # This is critical for Zscaler proxy environments
-ssl_cert_path = r"C:\Users\YoungkiYoon\AppData\Roaming\ZscalerRootCA.pem"
+ssl_cert_path = r"C:\Users\Youngki\AppData\Roaming\ZscalerRootCA.pem"
 if os.path.exists(ssl_cert_path):
     os.environ['REQUESTS_CA_BUNDLE'] = ssl_cert_path
     os.environ['CURL_CA_BUNDLE'] = ssl_cert_path

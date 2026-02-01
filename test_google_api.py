@@ -6,6 +6,7 @@ import os
 import sys
 from pathlib import Path
 
+
 # Add project root to path to use settings module
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
@@ -32,8 +33,33 @@ def test_gemini_connection():
     print("=" * 60)
 
     # Load environment variables
+    # env_path = Path(__file__).resolve().parent / '.env'
+    # load_dotenv(env_path)
+
+    # result = load_dotenv(env_path)
+    # print(f"[DEBUG] load_dotenv result: {result}")  # True면 성공, False면 실패
+    # print(f"[DEBUG] GOOGLE_API_KEY from os.getenv(): {os.getenv('GOOGLE_API_KEY')}")  # 디버깅
+    # print(f"[DEBUG] GOOGLE_API_KEY in os.environ: {'GOOGLE_API_KEY' in os.environ}") # 디버깅
+
+    ## 추가 디버깅 시작
     env_path = Path(__file__).resolve().parent / '.env'
-    load_dotenv(env_path)
+    print(f"[DEBUG] .env path: {env_path}")
+    print(f"[DEBUG] .env exists: {env_path.exists()}")
+    print(f"[DEBUG] .env is file: {env_path.is_file()}")
+
+    # .env 파일 내용 직접 읽기
+    if env_path.exists():
+        with open(env_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+            print(f"[DEBUG] .env file content:")
+            print(repr(content))  # repr()로 숨겨진 문자 확인
+            print(f"[DEBUG] .env file size: {env_path.stat().st_size} bytes")
+
+    result = load_dotenv(env_path)
+    print(f"[DEBUG] load_dotenv result: {result}")
+    print(f"[DEBUG] GOOGLE_API_KEY from os.getenv(): {os.getenv('GOOGLE_API_KEY')}")
+
+    ## 추가 디버깅 끝
 
     # Get API key from environment
     api_key = os.getenv('GOOGLE_API_KEY')
@@ -64,7 +90,7 @@ def test_gemini_connection():
 
         # Test text generation with Gemini
         print("\n[TEST] Testing text generation with Gemini Pro...")
-        model = genai.GenerativeModel('gemini-pro')
+        model = genai.GenerativeModel('gemini-2.5-flash')
 
         test_prompt = "Say 'Hello, this is a test from Kia Metadata Generator project!' in Korean."
         print(f"[PROMPT] {test_prompt}")
@@ -108,7 +134,7 @@ def test_gemini_with_system_instruction():
 
         # Create model with system instruction
         model = genai.GenerativeModel(
-            'gemini-pro',
+            'gemini-2.5-flash',
             system_instruction="You are a helpful assistant for document metadata extraction. Respond concisely and professionally."
         )
 
