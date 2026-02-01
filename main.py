@@ -29,20 +29,20 @@ def _list_input_files(settings: Settings, gcs_helper: GCSHelper, logger) -> list
     if getattr(settings, "gcs_input_bucket", ""):
         bucket_name = settings.gcs_input_bucket
         prefix = getattr(settings, "gcs_input_prefix", "") or ""
-        logger.info(f"\n📁 Listing files in gs://{bucket_name}/{prefix}")
+        logger.info(f"\n[LISTING] Files in gs://{bucket_name}/{prefix}")
         return gcs_helper.list_blobs(bucket_name=bucket_name, prefix=prefix, suffix="")
 
     # 2) Legacy folder URI: gs://bucket/prefix
     if settings.gcs_input_folder:
         bucket_name, prefix = settings.parse_gcs_uri(settings.gcs_input_folder)
-        logger.info(f"\n📁 Listing files in gs://{bucket_name}/{prefix}")
+        logger.info(f"\n[LISTING] Files in gs://{bucket_name}/{prefix}")
         return gcs_helper.list_blobs(bucket_name=bucket_name, prefix=prefix, suffix="")
 
     # 3) Wildcard path: gs://bucket/prefix/*
     if settings.gcs_input_path and "*" in settings.gcs_input_path:
         base = settings.gcs_input_path.split("*", 1)[0]
         bucket_name, prefix = settings.parse_gcs_uri(base)
-        logger.info(f"\n📁 Listing files in gs://{bucket_name}/{prefix}")
+        logger.info(f"\n[LISTING] Files in gs://{bucket_name}/{prefix}")
         return gcs_helper.list_blobs(bucket_name=bucket_name, prefix=prefix, suffix="")
 
     return []
@@ -80,7 +80,7 @@ def process_single_file(settings: Settings, logger) -> bool:
         size_bytes = gcs_helper.get_blob_size(settings.gcs_input_path)
         
         if size_bytes > settings.documentai_max_sync_bytes:
-            logger.info(f"⚠️ File size ({size_bytes} bytes) exceeds sync limit. Switching to async batch processing.")
+            logger.info(f"[WARNING] File size ({size_bytes} bytes) exceeds sync limit. Switching to async batch processing.")
             
             # Generate temporary output prefix
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -97,11 +97,11 @@ def process_single_file(settings: Settings, logger) -> bool:
             )
         
         # Generate metadata
-        logger.info("\n🔍 Generating metadata...")
+        logger.info("\n[PROCESSING] Generating metadata...")
         metadata = metadata_generator.generate_metadata(extracted_data)
         
         # Create DataFrame and save to GCS
-        logger.info("\n💾 Saving metadata to GCS...")
+        logger.info("\n[SAVING] Saving metadata to GCS...")
         df = csv_handler.create_dataframe([metadata])
         
         # Generate output file name from input file name
@@ -126,13 +126,13 @@ def process_single_file(settings: Settings, logger) -> bool:
         report = csv_handler.generate_report(df)
         print(report)
         
-        logger.info(f"\n✅ CSV saved to GCS: {gcs_uri}")
-        # logger.info(f"✅ CSV saved locally: {local_output_path}")
+        logger.info(f"\n[SUCCESS] CSV saved to GCS: {gcs_uri}")
+        # logger.info(f"[SUCCESS] CSV saved locally: {local_output_path}")
         
         return True
     
     except Exception as e:
-        logger.error(f"\n❌ Error processing file: {str(e)}")
+        logger.error(f"\n[ERROR] Error processing file: {str(e)}")
         import traceback
         traceback.print_exc()
         return False
@@ -188,7 +188,7 @@ def process_batch_files(settings: Settings, logger) -> bool:
                 try:
                     size_bytes = gcs_helper.get_blob_size(file_uri)
                 except Exception as e:
-                    logger.warning(f"⚠️  Could not get size for {file_uri}: {e}. Will try processing anyway.")
+                    logger.warning(f"[WARNING] Could not get size for {file_uri}: {e}. Will try processing anyway.")
                     size_bytes = 0
 
                 if size_bytes and size_bytes > settings.documentai_max_sync_bytes:
@@ -213,10 +213,10 @@ def process_batch_files(settings: Settings, logger) -> bool:
                 metadata = metadata_generator.generate_metadata(extracted_data)
                 all_metadata.append(metadata)
                 
-                logger.info(f"✅ Successfully processed: {file_uri.split('/')[-1]}")
+                logger.info(f"[SUCCESS] Successfully processed: {file_uri.split('/')[-1]}")
                 
             except Exception as e:
-                logger.error(f"❌ Error processing {file_uri}: {str(e)}")
+                logger.error(f"[ERROR] Error processing {file_uri}: {str(e)}")
                 continue
         
         if not all_metadata:
@@ -224,7 +224,7 @@ def process_batch_files(settings: Settings, logger) -> bool:
             return False
         
         # Create DataFrame and save to GCS
-        logger.info(f"\n💾 Saving metadata for {len(all_metadata)} files to GCS...")
+        logger.info(f"\n[SAVING] Saving metadata for {len(all_metadata)} files to GCS...")
         df = csv_handler.create_dataframe(all_metadata)
         
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -248,13 +248,13 @@ def process_batch_files(settings: Settings, logger) -> bool:
         report = csv_handler.generate_report(df)
         print(report)
         
-        logger.info(f"\n✅ CSV saved to GCS: {gcs_uri}")
-        # logger.info(f"✅ CSV saved locally: {local_output_path}")
+        logger.info(f"\n[SUCCESS] CSV saved to GCS: {gcs_uri}")
+        # logger.info(f"[SUCCESS] CSV saved locally: {local_output_path}")
         
         return True
     
     except Exception as e:
-        logger.error(f"\n❌ Error in batch processing: {str(e)}")
+        logger.error(f"\n[ERROR] Error in batch processing: {str(e)}")
         import traceback
         traceback.print_exc()
         return False

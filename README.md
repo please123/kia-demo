@@ -68,7 +68,8 @@ source venv/bin/activate
 
 ```bash
 pip install -r requirements.txt
-```
+
+pip config set global.cert $env:APPDATA\ZscalerRootCA.pem
 
 ## ⚙️ 설정 방법
 

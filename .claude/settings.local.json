@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python:*)",
+      "Bash($env:REQUESTS_CA_BUNDLE=\"C:\\\\Users\\\\YoungkiYoon\\\\AppData\\\\Roaming\\\\ZscalerRootCA.pem\")",
+      "Bash($env:CURL_CA_BUNDLE=\"C:\\\\Users\\\\YoungkiYoon\\\\AppData\\\\Roaming\\\\ZscalerRootCA.pem\")",
+      "Bash($env:SSL_CERT_FILE=\"C:\\\\Users\\\\YoungkiYoon\\\\AppData\\\\Roaming\\\\ZscalerRootCA.pem\")",
+      "Bash(Select-Object -First 100)"
+    ]
+  }
+}
