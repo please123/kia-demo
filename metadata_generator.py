@@ -169,7 +169,7 @@ JSON 출력: 모든 결과는 반드시 아래 구조의 JSON 형식으로만 �
                     'temperature': 0.1,  # Low temperature for consistent outputs
                     'top_p': 0.95,
                     'top_k': 40,
-                    'max_output_tokens': 2048,
+                    'max_output_tokens': 8192,
                 }
             )
 

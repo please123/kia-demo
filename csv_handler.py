@@ -4,7 +4,7 @@ CSV handler module for saving metadata to GCS
 import pandas as pd
 from typing import List, Dict
 import logging
-from io import StringIO
+from io import StringIO, BytesIO
 from utils.gcs_utils import GCSHelper
 
 
@@ -83,7 +83,9 @@ class CSVHandler:
             # Flatten nested metadata structure
             flattened_data = []
             for item in metadata_list:
-                metadata = item.get('metadata', {})
+                # Handle both flat and nested structures for backward compatibility
+                metadata = item.get('metadata', item)
+                
                 flattened = {
                     'type': metadata.get('type', ''),
                     'source': metadata.get('source', ''),
@@ -164,8 +166,8 @@ class CSVHandler:
             # Construct full blob path
             full_blob_path = f"{blob_path.rstrip('/')}/{file_name}"
             
-            # Convert DataFrame to CSV string
-            csv_buffer = StringIO()
+            # Convert DataFrame to CSV bytes with utf-8-sig encoding
+            csv_buffer = BytesIO()
             df.to_csv(csv_buffer, index=False, encoding='utf-8-sig')
             csv_content = csv_buffer.getvalue()
             
@@ -230,7 +232,9 @@ class CSVHandler:
                 bucket = client.bucket(bucket_name)
                 blob = bucket.blob(blob_name)
                 
-                csv_content = blob.download_as_string().decode('utf-8-sig')
+                # Download bytes and decode
+                csv_bytes = blob.download_as_string()
+                csv_content = csv_bytes.decode('utf-8-sig')
                 existing_df = pd.read_csv(StringIO(csv_content))
                 
                 # Append new data
@@ -240,8 +244,8 @@ class CSVHandler:
                 combined_df = new_df
                 self.logger.info(f"File doesn't exist, creating new with {len(new_df)} rows")
             
-            # Save combined DataFrame
-            csv_buffer = StringIO()
+            # Save combined DataFrame as bytes with utf-8-sig
+            csv_buffer = BytesIO()
             combined_df.to_csv(csv_buffer, index=False, encoding='utf-8-sig')
             csv_content = csv_buffer.getvalue()
             
