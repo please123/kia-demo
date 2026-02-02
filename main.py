@@ -2,6 +2,7 @@
 Main execution script for Kia Metadata Generator
 """
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -11,7 +12,7 @@ sys.path.insert(0, str(project_root))
 
 from config import Settings
 from utils import setup_logger, GCSHelper
-from modules import TextExtractor, MetadataGenerator, CSVHandler
+from modules import TextExtractor, MetadataGenerator, CSVHandler, VideoMetadataGenerator
 from tqdm import tqdm
 from datetime import datetime
 
@@ -133,6 +134,69 @@ def process_single_file(settings: Settings, logger) -> bool:
     
     except Exception as e:
         logger.error(f"\n[ERROR] Error processing file: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+def process_video(settings: Settings, logger) -> bool:
+    """Process a YouTube video: extract captions and generate metadata CSV
+
+    Reads YOUTUBE_URL from environment variables.
+
+    Args:
+        settings: Settings instance
+        logger: Logger instance
+
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        logger.info("=" * 60)
+        logger.info("Starting Kia Metadata Generator - Video Mode")
+        logger.info("=" * 60)
+
+        youtube_url = os.getenv('YOUTUBE_URL')
+        if not youtube_url:
+            logger.error("YOUTUBE_URL environment variable is not set")
+            return False
+
+        logger.info(f"YouTube URL: {youtube_url}")
+
+        # Initialize components
+        video_gen = VideoMetadataGenerator()
+        gcs_helper = GCSHelper(project_id=settings.gcp_project_id)
+        csv_handler = CSVHandler(gcs_helper=gcs_helper)
+
+        # Process video
+        metadata = video_gen.process_video(youtube_url)
+
+        # Create DataFrame and save to GCS
+        logger.info("\n[SAVING] Saving video metadata to GCS...")
+        df = csv_handler.create_dataframe([metadata])
+
+        video_id = VideoMetadataGenerator.extract_video_id(youtube_url)
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        output_file_name = f"video_{video_id}_{timestamp}_metadata.csv"
+
+        gcs_uri = csv_handler.save_to_gcs(
+            df=df,
+            bucket_name=settings.gcs_output_bucket,
+            blob_path=settings.gcs_output_path,
+            file_name=output_file_name
+        )
+
+        logger.info("\n" + "=" * 60)
+        logger.info("VIDEO PROCESSING COMPLETE")
+        logger.info("=" * 60)
+        report = csv_handler.generate_report(df)
+        print(report)
+
+        logger.info(f"\n[SUCCESS] CSV saved to GCS: {gcs_uri}")
+        return True
+
+    except Exception as e:
+        logger.error(f"\n[ERROR] Error processing video: {str(e)}")
         import traceback
         traceback.print_exc()
         return False
@@ -271,6 +335,11 @@ def main():
         help='Process all files in input bucket (batch mode)'
     )
     parser.add_argument(
+        '--video',
+        action='store_true',
+        help='Process YouTube video from YOUTUBE_URL env var (video mode)'
+    )
+    parser.add_argument(
         '--verbose',
         action='store_true',
         help='Enable verbose logging'
@@ -293,7 +362,9 @@ def main():
         sys.exit(1)
     
     # Process files
-    if args.batch:
+    if args.video:
+        success = process_video(settings, logger)
+    elif args.batch:
         success = process_batch_files(settings, logger)
     else:
         # If user provided wildcard like gs://bucket/prefix/*, treat it as batch automatically
