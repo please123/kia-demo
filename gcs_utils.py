@@ -78,7 +78,7 @@ class GCSHelper:
             raise
     
     def upload_from_string(self, bucket_name: str, blob_name: str, content: str, 
-                          content_type: str = 'text/csv') -> str:
+                          content_type: str = 'text/csv', encoding: str = 'utf-8') -> str:
         """Upload string content to GCS
         
         Args:
@@ -86,6 +86,7 @@ class GCSHelper:
             blob_name: Name of the blob (file path in GCS)
             content: String content to upload
             content_type: MIME type of the content
+            encoding: Encoding to use for string content (default: 'utf-8')
             
         Returns:
             GCS URI of the uploaded file
@@ -94,7 +95,13 @@ class GCSHelper:
             bucket = self.client.bucket(bucket_name)
             blob = bucket.blob(blob_name)
             
-            blob.upload_from_string(content, content_type=content_type)
+            # Encode content if needed
+            if isinstance(content, str):
+                encoded_content = content.encode(encoding)
+            else:
+                encoded_content = content
+
+            blob.upload_from_string(encoded_content, content_type=content_type)
             
             gcs_uri = f"gs://{bucket_name}/{blob_name}"
             self.logger.info(f"Uploaded file to {gcs_uri}")

@@ -119,8 +119,14 @@ class VideoMetadataGenerator:
     # ------------------------------------------------------------------
     # 통합 처리: URL → 자막 추출 → 메타데이터 생성
     # ------------------------------------------------------------------
-    def process_video(self, youtube_url: str) -> Dict:
-        """YouTube URL로부터 자막을 추출하고 메타데이터를 생성하여 반환"""
+    def process_video(self, youtube_url: str, gcs_helper=None, save_parsing_path: str = None) -> Dict:
+        """YouTube URL로부터 자막을 추출하고 메타데이터를 생성하여 반환
+        
+        Args:
+            youtube_url: YouTube URL
+            gcs_helper: Optional GCSHelper instance for saving transcript
+            save_parsing_path: Optional path to save transcript
+        """
         video_id = self.extract_video_id(youtube_url)
         self.logger.info(f"Processing video: {video_id} ({youtube_url})")
 
@@ -146,6 +152,20 @@ class VideoMetadataGenerator:
             'full_text': full_text,
             'gcs_uri': youtube_url,
         }
+
+        # Save transcript if requested
+        if gcs_helper and save_parsing_path:
+            try:
+                self.logger.info(f"Saving transcript to {save_parsing_path}")
+                gcs_helper.upload_from_string(
+                    bucket_name=save_parsing_path.split('/')[2],  # gs://bucket/path...
+                    blob_name='/'.join(save_parsing_path.split('/')[3:]),
+                    content=full_text,
+                    content_type='text/plain',
+                    encoding='utf-8-sig'
+                )
+            except Exception as e:
+                self.logger.error(f"Failed to save transcript: {e}")
 
         # 4) Gemini 기반 메타데이터 생성
         metadata = self.metadata_generator.generate_metadata(

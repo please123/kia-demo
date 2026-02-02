@@ -97,6 +97,24 @@ def process_single_file(settings: Settings, logger) -> bool:
                 gcs_uri=settings.gcs_input_path
             )
         
+        # Save extracted text to parsing folder
+        try:
+            input_file_name_base = settings.gcs_input_path.split('/')[-1]
+            parsing_file_name = f"{input_file_name_base}.txt"
+            # Construct parsing output path: output/metadata/parsing/filename.txt
+            parsing_blob_path = f"{settings.gcs_output_path.rstrip('/')}/parsing/{parsing_file_name}"
+            
+            logger.info(f"\n[SAVING] Saving extracted text to {parsing_blob_path}...")
+            csv_handler.gcs_helper.upload_from_string(
+                bucket_name=settings.gcs_output_bucket,
+                blob_name=parsing_blob_path,
+                content=extracted_data.get('full_text', ''),
+                content_type='text/plain',
+                encoding='utf-8-sig'
+            )
+        except Exception as e:
+            logger.error(f"[ERROR] Failed to save extracted text: {e}")
+
         # Generate metadata
         logger.info("\n[PROCESSING] Generating metadata...")
         metadata = metadata_generator.generate_metadata(extracted_data)
@@ -169,7 +187,14 @@ def process_video(settings: Settings, logger) -> bool:
         csv_handler = CSVHandler(gcs_helper=gcs_helper)
 
         # Process video
-        metadata = video_gen.process_video(youtube_url)
+        video_id = VideoMetadataGenerator.extract_video_id(youtube_url)
+        parsing_blob_path = f"gs://{settings.gcs_output_bucket}/{settings.gcs_output_path.rstrip('/')}/parsing/{video_id}.txt"
+        
+        metadata = video_gen.process_video(
+            youtube_url, 
+            gcs_helper=gcs_helper,
+            save_parsing_path=parsing_blob_path
+        )
 
         # Create DataFrame and save to GCS
         logger.info("\n[SAVING] Saving video metadata to GCS...")
@@ -273,6 +298,23 @@ def process_batch_files(settings: Settings, logger) -> bool:
                     # Extract text (Sync)
                     extracted_data = text_extractor.extract_text_from_gcs(gcs_uri=file_uri)
                 
+                # Save extracted text to parsing folder
+                try:
+                    input_file_name_base = file_uri.split('/')[-1]
+                    parsing_file_name = f"{input_file_name_base}.txt"
+                    parsing_blob_path = f"{settings.gcs_output_path.rstrip('/')}/parsing/{parsing_file_name}"
+                    
+                    logger.info(f"Saving extracted text to {parsing_blob_path}...")
+                    csv_handler.gcs_helper.upload_from_string(
+                        bucket_name=settings.gcs_output_bucket,
+                        blob_name=parsing_blob_path,
+                        content=extracted_data.get('full_text', ''),
+                        content_type='text/plain',
+                        encoding='utf-8-sig'
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to save extracted text: {e}")
+
                 # Generate metadata
                 metadata = metadata_generator.generate_metadata(extracted_data)
                 all_metadata.append(metadata)
