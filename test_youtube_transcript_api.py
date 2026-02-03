@@ -1,42 +1,14 @@
 """
-YouTube Data API v3 연결 확인 및 자막 추출 테스트
-- Step 1: API 키 로드 및 YouTube Data API v3 연결 확인 (videos.list)
-- Step 2: captions.list 로 자막 목록 조회
-- Step 3: youtube_transcript_api 로 자막 텍스트 추출 및 출력
+Gemini 1.5 Flash를 이용한 동영상 자막 추출 테스트
+- VIDEO_PATH 환경변수에 지정된 동영상 파일에서 자막 추출
+- Verbatim transcription (있는 그대로 받아쓰기)
 """
 import os
 import sys
 from pathlib import Path
-from urllib.parse import urlparse, parse_qs
-
-# SSL 검증 비활성화 (Zscaler 프록시 환경용) - requests 모듈 패치
-import urllib3
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
-# requests의 기본 verify를 False로 패치
-import requests
-original_request = requests.Session.request
-def patched_request(self, *args, **kwargs):
-    kwargs.setdefault('verify', False)
-    return original_request(self, *args, **kwargs)
-requests.Session.request = patched_request
 
 from dotenv import load_dotenv
-from googleapiclient.discovery import build
-from youtube_transcript_api import YouTubeTranscriptApi
-
-
-def extract_video_id(url: str) -> str:
-    """YouTube URL에서 video ID 추출"""
-    parsed = urlparse(url)
-    if parsed.hostname in ('youtu.be',):
-        return parsed.path.lstrip('/')
-    if parsed.hostname in ('www.youtube.com', 'youtube.com', 'm.youtube.com'):
-        if parsed.path == '/watch':
-            return parse_qs(parsed.query).get('v', [''])[0]
-        if parsed.path.startswith(('/embed/', '/v/')):
-            return parsed.path.split('/')[2]
-    raise ValueError(f"Cannot extract video ID from URL: {url}")
+import google.generativeai as genai
 
 
 def main():
@@ -45,103 +17,93 @@ def main():
     load_dotenv(env_path)
 
     api_key = os.getenv('GOOGLE_API_KEY')
-    youtube_url = os.getenv('YOUTUBE_URL')
+    video_path = os.getenv('VIDEO_PATH')
 
     if not api_key:
         print("[ERROR] GOOGLE_API_KEY 환경변수가 설정되어 있지 않습니다.")
         sys.exit(1)
-    if not youtube_url:
-        print("[ERROR] YOUTUBE_URL 환경변수가 설정되어 있지 않습니다.")
+    if not video_path:
+        print("[ERROR] VIDEO_PATH 환경변수가 설정되어 있지 않습니다.")
         sys.exit(1)
 
-    video_id = extract_video_id(youtube_url)
-    print(f"YouTube URL : {youtube_url}")
-    print(f"Video ID    : {video_id}")
+    if not os.path.exists(video_path):
+        print(f"[ERROR] 동영상 파일을 찾을 수 없습니다: {video_path}")
+        sys.exit(1)
+
+    print(f"Video Path  : {video_path}")
+    print(f"File Size   : {os.path.getsize(video_path) / (1024*1024):.2f} MB")
     print("=" * 60)
 
-    # ── Step 1: YouTube Data API v3 연결 확인 (videos.list) ──
-    print("Step 1) YouTube Data API v3 연결 확인 (videos.list) ...")
+    # ── Gemini API 설정 ──
+    print("Step 1) Gemini API 연결 및 파일 업로드 ...")
     try:
-        youtube = build('youtube', 'v3', developerKey=api_key)
-        response = youtube.videos().list(
-            part='snippet',
-            id=video_id
-        ).execute()
+        genai.configure(api_key=api_key)
 
-        items = response.get('items', [])
-        if not items:
-            print(f"  [WARN] 동영상을 찾을 수 없습니다: {video_id}")
-            sys.exit(1)
+        # 동영상 파일 업로드
+        print(f"  Uploading video file...")
+        video_file = genai.upload_file(path=video_path)
+        print(f"  [OK] 파일 업로드 완료: {video_file.name}")
 
-        snippet = items[0]['snippet']
-        print(f"  [OK] API 연결 성공")
-        print(f"  Title   : {snippet.get('title')}")
-        print(f"  Channel : {snippet.get('channelTitle')}")
-        print(f"  Published: {snippet.get('publishedAt')}")
+        # 파일 처리 대기
+        import time
+        while video_file.state.name == "PROCESSING":
+            print("  Processing video...")
+            time.sleep(5)
+            video_file = genai.get_file(video_file.name)
+
+        if video_file.state.name == "FAILED":
+            raise ValueError(f"파일 처리 실패: {video_file.state.name}")
+
+        print(f"  [OK] 파일 처리 완료: {video_file.state.name}")
+
     except Exception as e:
-        print(f"  [FAIL] API 연결 실패: {e}")
+        print(f"  [FAIL] Gemini API 연결 또는 파일 업로드 실패: {e}")
+        import traceback
+        traceback.print_exc()
         sys.exit(1)
 
     print("-" * 60)
 
-    # ── Step 2: captions.list 로 자막 목록 조회 ──
-    print("Step 2) captions.list 로 자막 목록 조회 ...")
+    # ── 자막 추출 ──
+    print("Step 2) Gemini 1.5 Flash로 자막 추출 ...")
     try:
-        captions_response = youtube.captions().list(
-            part='snippet',
-            videoId=video_id
-        ).execute()
+        model = genai.GenerativeModel('gemini-1.5-flash')
 
-        caption_items = captions_response.get('items', [])
-        if not caption_items:
-            print("  [WARN] 등록된 자막 트랙이 없습니다.")
-        else:
-            for cap in caption_items:
-                s = cap['snippet']
-                print(f"  - id: {cap['id']}  language: {s['language']}  "
-                      f"name: \"{s.get('name', '')}\"  trackKind: {s.get('trackKind')}")
-    except Exception as e:
-        print(f"  [WARN] captions.list 호출 실패 (권한 제한일 수 있음): {e}")
+        prompt = """첨부된 파일의 음성을 토씨 하나 틀리지 않고 그대로 받아쓰기(Verbatim transcription)해줘.
+음성 중간의 '음', '어'와 같은 감탄사나 반복되는 단어도 생략하지 말고 포함해줘.
+문법 교정이나 문장 다듬기를 절대 하지 마."""
 
-    print("-" * 60)
+        print("  Generating transcript...")
+        response = model.generate_content(
+            [video_file, prompt],
+            generation_config={
+                'temperature': 0.1,
+                'max_output_tokens': 8192,
+            }
+        )
 
-    # ── Step 3: 자막 텍스트 추출 (youtube_transcript_api) ──
-    print("Step 3) 자막 텍스트 추출 (youtube_transcript_api) ...")
-    try:
-        transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
-
-        # 사용 가능한 자막 목록 출력
-        print("  Available transcripts:")
-        for t in transcript_list:
-            print(f"    - {t.language} ({t.language_code})  generated={t.is_generated}")
-
-        # ko → en 순으로 탐색
-        transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
-        try:
-            transcript = transcript_list.find_transcript(['ko', 'en'])
-        except Exception:
-            transcript = transcript_list.find_generated_transcript(['ko', 'en'])
-
-        print(f"  Selected : {transcript.language} ({transcript.language_code})")
+        print("  [OK] 자막 추출 완료")
         print("-" * 60)
 
-        entries = transcript.fetch()
-        print(f"  Total entries: {len(entries)}")
-        print()
+        # 자막 출력
+        print("\n[TRANSCRIPT]\n")
+        print(response.text)
 
-        # 전체 자막 출력
-        for i, entry in enumerate(entries):
-            text = entry['text'] if isinstance(entry, dict) else getattr(entry, 'text', str(entry))
-            print(f"  [{i+1:04d}] {text}")
-
-        print()
-        print("=" * 60)
+        print("\n" + "=" * 60)
         print("[SUCCESS] 자막 추출 완료")
 
     except Exception as e:
         print(f"  [FAIL] 자막 추출 실패: {e}")
         import traceback
         traceback.print_exc()
+
+    finally:
+        # 업로드된 파일 삭제 (선택적)
+        try:
+            genai.delete_file(video_file.name)
+            print(f"  [INFO] 업로드된 파일 삭제 완료: {video_file.name}")
+        except:
+            pass
 
 
 if __name__ == "__main__":
