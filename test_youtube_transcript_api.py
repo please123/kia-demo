@@ -10,12 +10,21 @@ from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 
 # SSL 검증 비활성화 (Zscaler 프록시 환경용)
-os.environ['REQUESTS_CA_BUNDLE'] = ''
-os.environ['CURL_CA_BUNDLE'] = ''
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+import requests
 
 from dotenv import load_dotenv
 from googleapiclient.discovery import build
 from youtube_transcript_api import YouTubeTranscriptApi
+
+
+class NoSSLVerifySession(requests.Session):
+    """SSL 검증을 비활성화한 requests Session"""
+    def __init__(self):
+        super().__init__()
+        self.verify = False
 
 
 def extract_video_id(url: str) -> str:
@@ -100,7 +109,9 @@ def main():
     # ── Step 3: 자막 텍스트 추출 (youtube_transcript_api) ──
     print("Step 3) 자막 텍스트 추출 (youtube_transcript_api) ...")
     try:
-        transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+        # SSL 검증 비활성화된 세션 사용
+        http_client = NoSSLVerifySession()
+        transcript_list = YouTubeTranscriptApi.list_transcripts(video_id, http_client=http_client)
 
         # 사용 가능한 자막 목록 출력
         print("  Available transcripts:")
@@ -108,7 +119,7 @@ def main():
             print(f"    - {t.language} ({t.language_code})  generated={t.is_generated}")
 
         # ko → en 순으로 탐색
-        transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+        transcript_list = YouTubeTranscriptApi.list_transcripts(video_id, http_client=http_client)
         try:
             transcript = transcript_list.find_transcript(['ko', 'en'])
         except Exception:
