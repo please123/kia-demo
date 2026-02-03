@@ -9,6 +9,10 @@ import sys
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 
+# SSL 검증 비활성화 (Zscaler 프록시 환경용)
+os.environ['REQUESTS_CA_BUNDLE'] = ''
+os.environ['CURL_CA_BUNDLE'] = ''
+
 from dotenv import load_dotenv
 from googleapiclient.discovery import build
 from youtube_transcript_api import YouTubeTranscriptApi
