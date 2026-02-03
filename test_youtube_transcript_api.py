@@ -9,15 +9,21 @@ import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
+
+# .env 먼저 로드 (GOOGLE_APPLICATION_CREDENTIALS 설정 위해)
+env_path = Path(__file__).resolve().parent / '.env'
+load_dotenv(env_path)
+
+# GCP 인증 설정
+credentials_path = os.getenv('GCP_CREDENTIALS_PATH')
+if credentials_path:
+    os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = credentials_path
+
 import vertexai
 from vertexai.generative_models import GenerativeModel, Part
 
 
 def main():
-    # ── .env 로드 ──
-    env_path = Path(__file__).resolve().parent / '.env'
-    load_dotenv(env_path)
-
     project_id = os.getenv('GCP_PROJECT_ID')
     video_path = os.getenv('VIDEO_PATH')
     location = os.getenv('VERTEX_AI_LOCATION', 'us-central1')
