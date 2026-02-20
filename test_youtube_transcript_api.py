@@ -55,9 +55,9 @@ def main():
     print("-" * 60)
 
     # ── 자막 추출 ──
-    print("Step 2) Gemini 1.5 Flash로 자막 추출 ...")
+    print("Step 2) Gemini 2.0 Flash로 자막 추출 ...")
     try:
-        model = GenerativeModel('gemini-1.5-flash')
+        model = GenerativeModel('gemini-2.0-flash')
 
         # GCS 파일을 직접 참조
         video_part = Part.from_uri(video_path, mime_type="video/mp4")
